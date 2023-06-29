@@ -6,4 +6,5 @@ I developed This Twitter Bot to post Philadelphia Phillies-related tweets whenev
 The access and API keys for the Twitter account are not included.
 
 ### Notice
-This repository is meant to display my work, and if anyone wants to see how I did it, they can learn to make their own bot. Please do not copy the content directly or make a copycat bot. Feel free to use it to make a similar bot for a different team.
+* This repository is meant to display my work, and if anyone wants to see how I did it, they can learn to make their own bot. Please do not copy the content directly or make a copycat bot. Feel free to use it to make a similar bot for a different team.
+* Check out the account and support, `@philstweetbot` on Twitter.
