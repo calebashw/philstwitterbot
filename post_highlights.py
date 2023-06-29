@@ -1,3 +1,8 @@
+# Author: Caleb Ash
+# Date: Created June, 2023
+# Maintained by Caleb Ash
+# Program that uses Twitter bot to tweet out today's game summary, when ran
+
 import tweepy
 import statsapi
 import time
@@ -17,14 +22,18 @@ auth = tweepy.OAuthHandler(consumer_key=bot_keys.CONSUMER_KEY, consumer_secret=b
 auth.set_access_token(bot_keys.ACCESS_TOKEN, bot_keys.ACCESS_SECRET)
 api = tweepy.API(auth)
 
+# Function that splits up all the tweets
 def split_string_by_newlines(long_string):
     # Split the long string using the regular expression pattern for one or more consecutive newline characters
     substrings = re.split(r'\n+', long_string)
     return substrings
 
+# List containing all highlights (including links), with string for each index
 tweets = split_string_by_newlines(statsapi.game_highlights(statsapi.last_game(143)))
 
 final_tweet = ''
+
+# Checking size of list
 print(len(tweets))
 # Algorithm to accurately chop up and post highlights with link, one at a time. Only posts if they're on the Phillies
 i = 0
