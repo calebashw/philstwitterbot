@@ -1,15 +1,14 @@
 # Author: Caleb Ash
 # Date: Created June, 2023
 # Maintained by Caleb Ash
-# Program that uses Twitter bot to tweet out today's game summary, when ran
+# Program that uses Twitter bot to tweet out all of the Phillies highlights from most recent game
 
 import tweepy
 import statsapi
 import time
-import bot_keys
+from ..bot_keys import BEARER_TOKEN, CONSUMER_KEY, CONSUMER_SECRET, ACCESS_SECRET, ACCESS_TOKEN
 import pybaseball
 import pandas
-#from schedule_tweet import *
 from tweet_funcs import *
 from pybaseball import *
 import random
@@ -75,7 +74,7 @@ for tweet in range(8, len(tweets) - 1):
                 final_check += char
              
             #If it's Nick Castellanos
-            if final_check == "Nick Castellanos":
+            if final_check == "Nick Castellanos" or final_check[0:10] == "Castellanos":
                 final_check = "Nicholas Castellanos"
             
             # Look up the player to see if they are a Phillie
