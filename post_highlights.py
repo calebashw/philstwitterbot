@@ -1,114 +1,126 @@
 # Author: Caleb Ash
-# Date: Created June, 2023
-# Maintained by Caleb Ash
-# Program that uses Twitter bot to tweet out all of the Phillies highlights from most recent game
+# Created June 2023, refactored 2026
+# Tweets Phillies highlights from yesterday's finished game(s).
+# Hard-capped on tweets/run so a parse bug can't blow up your API bill.
 
-import tweepy
-import statsapi
-import time
-from ..bot_keys import BEARER_TOKEN, CONSUMER_KEY, CONSUMER_SECRET, ACCESS_SECRET, ACCESS_TOKEN
-import pybaseball
-import pandas
-from tweet_funcs import *
-from pybaseball import *
-import random
+import os
 import re
+import sys
+import time
+from datetime import date, timedelta
 
-client = tweepy.Client(consumer_key=bot_keys.CONSUMER_KEY, consumer_secret=bot_keys.CONSUMER_SECRET, 
-                       access_token=bot_keys.ACCESS_TOKEN, access_token_secret=bot_keys.ACCESS_SECRET, bearer_token=bot_keys.BEARER_TOKEN)
+import statsapi
 
-auth = tweepy.OAuthHandler(consumer_key=bot_keys.CONSUMER_KEY, consumer_secret=bot_keys.CONSUMER_SECRET)
-auth.set_access_token(bot_keys.ACCESS_TOKEN, bot_keys.ACCESS_SECRET)
-api = tweepy.API(auth)
+from tweet_funcs import TwitterClient
 
-# Function that splits up all the tweets
-def split_string_by_newlines(long_string):
-    # Split the long string using the regular expression pattern for one or more consecutive newline characters
-    substrings = re.split(r'\n+', long_string)
-    return substrings
+PHILLIES_TEAM_ID = 143
+MAX_TWEETS_PER_RUN = int(os.environ.get("HIGHLIGHTS_MAX_TWEETS", "8"))
+DRY_RUN = os.environ.get("DRY_RUN", "").lower() in ("1", "true", "yes")
+TWEET_LIMIT = 280
+SLEEP_BETWEEN_TWEETS_SEC = 3
 
-# List containing all highlights (including links), with string for each index
-tweets = split_string_by_newlines(statsapi.game_highlights(statsapi.last_game(143)))
 
-final_tweet = ''
+def split_lines(blob: str) -> list[str]:
+    return [s for s in re.split(r"\n+", blob) if s.strip()]
 
-# Checking size of list
-print(len(tweets))
-# Algorithm to accurately chop up and post highlights with link, one at a time. Only posts if they're on the Phillies
-i = 0
-skip_next = False
-# Skips the first few highlights since they are just starting lineups, etc.
-for tweet in range(8, len(tweets) - 1):
-    # Taking first string and assigning to a temp
-    temp_tweet = tweets[tweet]
 
-    # Check to see if this string should be skipped
-    if temp_tweet[:5] != 'https' and skip_next:
-        skip_next = False
-        continue
-
-    # Updating final_tweet with temp, stripping of extra spaces
-    final_tweet = (final_tweet + " " + temp_tweet).strip()
-
-    #If I've done too many tweets, stop
-    if i > 45:
-        break
-
-    # If the temp just added on is a URL
-    elif temp_tweet[:5] == 'https':
-        # If the length of the tweet is within the character limit
-        if len(final_tweet) <= 280:
-            k = 0
-            final_check = ''
-            # Splitting up final tweet and grabbing the first two words
-            for char in final_tweet:
-                if k == 2:
-                    break
-
-                if char == "'" or char == ' ':
-                    k += 1
-                
-                if k == 2:
-                    break
-
-                final_check += char
-             
-            #If it's Nick Castellanos
-            if final_check == "Nick Castellanos" or final_check[0:10] == "Castellanos":
-                final_check = "Nicholas Castellanos"
-            
-            # Look up the player to see if they are a Phillie
-            player = statsapi.lookup_player(final_check)
-
-            # Skip Tweet if it's just a link
-            if final_tweet[:5] == 'https':
-                print("Only came with link")
-                continue
-
-            # If the player couldn't be found
-            if player == []:
-                print("Player could not be found")
-                continue
-
-            # If the player is not on the Phillies
-            if player[0]['currentTeam']['id'] != 143:
-                print("player is not on Phillies")
-                continue
-
-            # Tweet out the Tweet!, then increment, pause
-            #client.create_tweet(text=final_tweet)
-            print(final_tweet)
-            i += 1
-            print("Tweeting out highlights")
-            time.sleep(3)
+def first_two_words(text: str) -> str:
+    """Extract the first two whitespace/apostrophe-separated tokens — used to identify the player."""
+    out = []
+    k = 0
+    for ch in text:
+        if ch in (" ", "'"):
+            k += 1
+            if k == 2:
+                break
         else:
-            print("Tweet is too many characters, sorry")
-        final_tweet = ''
-    elif temp_tweet == '':
-        break
-    else:
-        print("Skipping next")
-        skip_next = True
-        continue
+            out.append(ch)
+    return "".join(out).strip()
 
-# client.create_tweet(text="Josh Harrison crushes a ball over the left field wall for a solo home run, giving the Phillies their eighth run of the game in the top of the 5th https://mlb-cuts-diamond.mlb.com/FORGE/2023/2023-06/28/b22434aa-1141ff0d-60f43bf6-csvm-diamondx64-asset_1280x720_59_4000K.mp4")
+
+def is_phillie(name: str) -> bool:
+    if not name:
+        return False
+    if name == "Nick Castellanos" or name.startswith("Castellanos"):
+        name = "Nicholas Castellanos"
+    try:
+        matches = statsapi.lookup_player(name)
+    except Exception as e:
+        print(f"  player lookup failed for {name!r}: {e}")
+        return False
+    if not matches:
+        return False
+    return matches[0].get("currentTeam", {}).get("id") == PHILLIES_TEAM_ID
+
+
+def yesterday_game_ids() -> list[int]:
+    yesterday = date.today() - timedelta(days=1)
+    games = statsapi.schedule(start_date=yesterday.isoformat(), team=PHILLIES_TEAM_ID)
+    return [g["game_id"] for g in games if g.get("status") == "Final"]
+
+
+def collect_highlight_tweets(game_id: int) -> list[str]:
+    """Walk the human-readable highlights blob, pair each description with its URL,
+    keep only Phillies-player highlights that fit in a tweet."""
+    try:
+        blob = statsapi.game_highlights(game_id)
+    except Exception as e:
+        print(f"  game_highlights failed for game_id={game_id}: {e}")
+        return []
+
+    lines = split_lines(blob)
+    tweets: list[str] = []
+    pending = ""
+    skip_next = False
+
+    # Skip the first chunk (lineups, weather, etc.) — same heuristic as the original script.
+    for line in lines[8:]:
+        if not line.startswith("https") and skip_next:
+            skip_next = False
+            continue
+
+        pending = (pending + " " + line).strip()
+
+        if line.startswith("https"):
+            if pending.startswith("https"):
+                pending = ""
+                continue
+            if len(pending) <= TWEET_LIMIT and is_phillie(first_two_words(pending)):
+                tweets.append(pending)
+            pending = ""
+        else:
+            skip_next = True
+
+    return tweets
+
+
+def main() -> int:
+    game_ids = yesterday_game_ids()
+    if not game_ids:
+        print("No finished Phillies game yesterday; nothing to tweet.")
+        return 0
+
+    all_tweets: list[str] = []
+    for gid in game_ids:
+        all_tweets.extend(collect_highlight_tweets(gid))
+
+    if not all_tweets:
+        print("No Phillies highlights matched; nothing to tweet.")
+        return 0
+
+    capped = all_tweets[:MAX_TWEETS_PER_RUN]
+    print(f"Found {len(all_tweets)} candidate highlights, posting {len(capped)} (cap={MAX_TWEETS_PER_RUN}).")
+
+    twitter = TwitterClient()
+    for i, msg in enumerate(capped, start=1):
+        print(f"[{i}/{len(capped)}] {msg}")
+        if DRY_RUN:
+            print("  (DRY_RUN: skipped)")
+        else:
+            twitter.tweet(msg)
+            time.sleep(SLEEP_BETWEEN_TWEETS_SEC)
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())

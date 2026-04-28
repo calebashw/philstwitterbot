@@ -1,36 +1,39 @@
 # Author: Caleb Ash
-# Date: Created June, 2023
-# Maintained by Caleb Ash
-# Program that uses Twitter bot to tweet out today's game summary, when ran
-import tweepy
+# Created June 2023, refactored 2026
+# Tweets a summary of yesterday's Phillies game(s). Run the morning after.
+# Skips off-days and any game whose status isn't "Final" (postponed, suspended, in progress, etc.).
+
+import sys
+from datetime import date, timedelta
+
 import statsapi
-import time
-import bot_keys
-from tweet_funcs import *
-from pybaseball import *
-from datetime import date
 
-client = tweepy.Client(consumer_key=bot_keys.CONSUMER_KEY, consumer_secret=bot_keys.CONSUMER_SECRET, 
-                       access_token=bot_keys.ACCESS_TOKEN, access_token_secret=bot_keys.ACCESS_SECRET, bearer_token=bot_keys.BEARER_TOKEN)
+from tweet_funcs import TwitterClient
 
-auth = tweepy.OAuthHandler(consumer_key=bot_keys.CONSUMER_KEY, consumer_secret=bot_keys.CONSUMER_SECRET)
-auth.set_access_token(bot_keys.ACCESS_TOKEN, bot_keys.ACCESS_SECRET)
-api = tweepy.API(auth)
+PHILLIES_TEAM_ID = 143
 
 
-# Make a check that checks if the game today is already completed, only then will it tweet out summary
+def fetch_finished_games(target_day: date):
+    games = statsapi.schedule(start_date=target_day.isoformat(), team=PHILLIES_TEAM_ID)
+    return [g for g in games if g.get("status") == "Final"]
 
-day = date.today()
-game = statsapi.schedule(start_date=day, team='143')
 
-#Used to access tweeting functions
-funcs = TwitterClient()
+def main() -> int:
+    yesterday = date.today() - timedelta(days=1)
+    finished = fetch_finished_games(yesterday)
 
-summary = game[0]['summary']
-final_summary = "Today's game summary:\n" + summary
-print(final_summary)
-try:
-    funcs.tweet(final_summary)
-    print("Summary succesfully Tweeted!")
-except:
-    print("Summary could not be tweeted :(")
+    if not finished:
+        print(f"No finished Phillies game on {yesterday.isoformat()}; nothing to tweet.")
+        return 0
+
+    twitter = TwitterClient()
+    for game in finished:
+        summary = game.get("summary", "")
+        message = f"Yesterday's game summary:\n{summary}"
+        print(message)
+        twitter.tweet(message)
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())

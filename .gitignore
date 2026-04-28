@@ -1,0 +1,20 @@
+# Secrets
+.env
+.env.*
+bot_keys
+bot_keys.py
+*.key
+*.pem
+
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+env/
+
+# OS / editor
+.DS_Store
+.idea/
+.vscode/

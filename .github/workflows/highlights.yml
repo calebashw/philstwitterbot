@@ -1,0 +1,38 @@
+name: Game highlights (yesterday)
+
+# 13:00 UTC = 9am ET in EDT / 8am ET in EST.
+# Runs after the summary workflow so the timeline order is summary -> highlights -> today's preview.
+# HIGHLIGHTS_MAX_TWEETS hard-caps spend; bump it via workflow_dispatch input or repo variable if needed.
+on:
+  schedule:
+    - cron: "0 13 * * *"
+  workflow_dispatch:
+    inputs:
+      max_tweets:
+        description: "Hard cap on tweets per run"
+        default: "8"
+        required: false
+      dry_run:
+        description: "Set 'true' to log without tweeting"
+        default: "false"
+        required: false
+
+jobs:
+  tweet:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+      - run: pip install -r requirements.txt
+      - run: python post_highlights.py
+        env:
+          CONSUMER_KEY: ${{ secrets.CONSUMER_KEY }}
+          CONSUMER_SECRET: ${{ secrets.CONSUMER_SECRET }}
+          ACCESS_TOKEN: ${{ secrets.ACCESS_TOKEN }}
+          ACCESS_SECRET: ${{ secrets.ACCESS_SECRET }}
+          BEARER_TOKEN: ${{ secrets.BEARER_TOKEN }}
+          HIGHLIGHTS_MAX_TWEETS: ${{ inputs.max_tweets || '8' }}
+          DRY_RUN: ${{ inputs.dry_run || 'false' }}

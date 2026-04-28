@@ -1,39 +1,59 @@
 # Author: Caleb Ash
-# Date: Created June, 2023
-# Maintained by Caleb Ash
-# Class that contains Tweet, Delete functions to use for ease with other programs
+# Created June 2023, refactored 2026
+# Centralized X (Twitter) client + thin wrapper used by every script.
 
+import os
 import tweepy
-import time
-import bot_keys
 
-# Getting API access to account
-client = tweepy.Client(consumer_key=bot_keys.CONSUMER_KEY, consumer_secret=bot_keys.CONSUMER_SECRET, 
-                       access_token=bot_keys.ACCESS_TOKEN, access_token_secret=bot_keys.ACCESS_SECRET, bearer_token=bot_keys.BEARER_TOKEN)
+REQUIRED_ENV = (
+    "CONSUMER_KEY",
+    "CONSUMER_SECRET",
+    "ACCESS_TOKEN",
+    "ACCESS_SECRET",
+    "BEARER_TOKEN",
+)
 
-#Class definition for TwitterClient
-class TwitterClient():
 
-    #Tweet function takes a string "message" and optional id "replyid". Add ID if you want to reply to tweet
-    # When called, will Tweet out whatever is passed as "message"
-    def tweet(self, message: str, replyid: id = None):
-        if replyid is None:
-            client.create_tweet(text=message)
-            print("Successful Tweet!")
-        else:
-            client.create_tweet(text=message, in_reply_to_tweet_id=replyid)
-            print("Successful Tweet Reply!")
+def _load_credentials():
+    missing = [name for name in REQUIRED_ENV if not os.environ.get(name)]
+    if missing:
+        raise RuntimeError(
+            "Missing required environment variables: "
+            + ", ".join(missing)
+            + ". Set them locally (export VAR=...) or via GitHub Actions secrets."
+        )
+    return {name: os.environ[name] for name in REQUIRED_ENV}
 
-    # Thread creator (Doesn't currently function, need paid access to Twitter API)
-    def thread_creator(self, message: str, replyid: id, length: int):
-        i = 0
-        while i < length:
-            t = client.create_tweet(text=message, in_reply_to_tweet_id=replyid)
-            url_split = t.url.split('/')
-            replyid = url_split[-1]
-            i += 1
 
-    # Given a Tweet ID, deletes tweet
-    def delete(self, id: id):
-        client.delete_tweet(id)
-        print("Tweet deleted:", id)
+_creds = _load_credentials()
+
+client = tweepy.Client(
+    consumer_key=_creds["CONSUMER_KEY"],
+    consumer_secret=_creds["CONSUMER_SECRET"],
+    access_token=_creds["ACCESS_TOKEN"],
+    access_token_secret=_creds["ACCESS_SECRET"],
+    bearer_token=_creds["BEARER_TOKEN"],
+)
+
+
+class TwitterClient:
+    def tweet(self, message: str, replyid: int | None = None) -> int | None:
+        """Post a tweet; if replyid is set, post as a reply. Returns the new tweet id, or None on failure."""
+        try:
+            if replyid is None:
+                resp = client.create_tweet(text=message)
+            else:
+                resp = client.create_tweet(text=message, in_reply_to_tweet_id=replyid)
+            new_id = resp.data["id"]
+            print(f"Tweet posted: id={new_id}")
+            return new_id
+        except tweepy.TweepyException as e:
+            print(f"Tweet failed: {e}")
+            return None
+
+    def delete(self, tweet_id: int) -> None:
+        try:
+            client.delete_tweet(tweet_id)
+            print(f"Tweet deleted: {tweet_id}")
+        except tweepy.TweepyException as e:
+            print(f"Delete failed for {tweet_id}: {e}")

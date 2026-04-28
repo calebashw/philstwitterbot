@@ -1,75 +1,53 @@
 # Author: Caleb Ash
-# Date: Created June, 2023
-# Maintained by Caleb Ash
-# Program that uses Twitter bot to tweet out today's before it happens (game preview)
+# Created June 2023, refactored 2026
+# Tweets a game-day preview for the Phillies' game today.
+# Exits cleanly (no tweet) on off-days or when the schedule call returns nothing.
 
-import tweepy
-import statsapi
-import time
-import bot_keys
-import pybaseball
-import pandas
+import sys
 from datetime import date
-#from schedule_tweet import *
-from tweet_funcs import *
-from pybaseball import *
-import random
-import re
 
-# Getting all access keys
-client = tweepy.Client(consumer_key=bot_keys.CONSUMER_KEY, consumer_secret=bot_keys.CONSUMER_SECRET, 
-                       access_token=bot_keys.ACCESS_TOKEN, access_token_secret=bot_keys.ACCESS_SECRET, bearer_token=bot_keys.BEARER_TOKEN)
+import statsapi
 
-auth = tweepy.OAuthHandler(consumer_key=bot_keys.CONSUMER_KEY, consumer_secret=bot_keys.CONSUMER_SECRET)
-auth.set_access_token(bot_keys.ACCESS_TOKEN, bot_keys.ACCESS_SECRET)
-api = tweepy.API(auth)
+from tweet_funcs import TwitterClient
 
-# Gets date in format: 'YYYY-MM-DD'
-day = date.today()
+PHILLIES_TEAM_ID = 143
 
-# Function meant to see what day of the week it is
-def calculate_weekday():
-    weekday = day.weekday()
-    if weekday == 0:
-        weekday_str = "Monday"
-    elif weekday == 1:
-        weekday_str = "Tuesday"
-    elif weekday == 2:
-        weekday_str = "Wednesday"
-    elif weekday == 3:
-        weekday_str = "Thursday"
-    elif weekday == 4:
-        weekday_str = "Friday"
-    elif weekday == 5:
-        weekday_str = "Saturday"
-    else:
-        weekday_str = "Sunday"
 
-    return weekday_str
+def build_preview(today: date) -> str | None:
+    games = statsapi.schedule(start_date=today.isoformat(), team=PHILLIES_TEAM_ID)
+    if not games:
+        return None
 
-# Creates TwitterClient object to call 'tweet'
-funcs = TwitterClient()
+    game = games[0]
+    away = game.get("away_name", "Away")
+    home = game.get("home_name", "Home")
+    away_pitch = game.get("away_probable_pitcher") or "TBD"
+    home_pitch = game.get("home_probable_pitcher") or "TBD"
+    stadium = game.get("venue_name", "the ballpark")
+    game_time = game.get("game_datetime", "")
 
-# Gets weekday as String
-weekday_string = calculate_weekday()
+    weekday = today.strftime("%A")
+    formatted_date = today.strftime("%m-%d-%Y")
 
-# Gets summary from statsapi for Phillies game that day
-game = statsapi.schedule(start_date=day, team=143)
-summary = game[0]['summary']
-start = "Calling all Phillies fans, it's game day!\n"
+    return (
+        "Calling all Phillies fans, it's game day!\n"
+        f"{weekday}, {formatted_date}: {away} @ {home}, "
+        f"with {away_pitch} vs {home_pitch} at {stadium}. "
+        "Let's play ball!"
+    )
 
-# Formats date as 'MM-DD-YYYY'
-formatted_date = day.strftime("%m-%d-%Y")
 
-# Gets home and away probable pitcher, stadium, and combines them together.
-home_pitch = game[0]['home_probable_pitcher']
-away_pitch = game[0]['away_probable_pitcher']
-stadium = game[0]['venue_name']
-final_tweet = ''
-final_tweet = final_tweet + summary + ', with ' + away_pitch + ' vs ' + home_pitch + " at " + stadium + ". Let's play ball!"
+def main() -> int:
+    today = date.today()
+    message = build_preview(today)
+    if message is None:
+        print(f"No Phillies game on {today.isoformat()}; nothing to tweet.")
+        return 0
 
-# Adds day of week and date to tweet
-final_tweet = start + weekday_string + ', ' + formatted_date + final_tweet[10:] 
+    print(message)
+    TwitterClient().tweet(message)
+    return 0
 
-# Tweets out final Tweet
-funcs.tweet(message=final_tweet)
+
+if __name__ == "__main__":
+    sys.exit(main())
