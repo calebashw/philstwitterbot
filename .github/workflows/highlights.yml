@@ -1,11 +1,15 @@
-name: Game highlights (yesterday)
+name: Game highlights
 
-# 13:00 UTC = 9am ET in EDT / 8am ET in EST.
-# Runs after the summary workflow so the timeline order is summary -> highlights -> today's preview.
-# HIGHLIGHTS_MAX_TWEETS hard-caps spend; bump it via workflow_dispatch input or repo variable if needed.
+# Two windows in EDT (regular season). UTC values listed; during EST these shift 1h earlier.
+#   Window 1: 3:30pm-6:30pm EDT  -> 19:30-22:30 UTC, every 30 min  (afternoon games)
+#   Window 2: 10:30pm-1:30am EDT -> 02:30-05:30 UTC, every 30 min  (night games, runs into next UTC day)
+# 14 fires/day total. Most no-op cheaply: only the run that first sees a new finished game posts.
 on:
   schedule:
-    - cron: "0 13 * * *"
+    - cron: "30 19 * * *"
+    - cron: "0,30 20-22 * * *"
+    - cron: "30 2 * * *"
+    - cron: "0,30 3-5 * * *"
   workflow_dispatch:
     inputs:
       max_tweets:
@@ -17,6 +21,15 @@ on:
         default: "false"
         required: false
 
+# Serialize: never let two highlights runs race on the state file.
+concurrency:
+  group: highlights
+  cancel-in-progress: false
+
+# Need write access to commit the dedup state file back to main.
+permissions:
+  contents: write
+
 jobs:
   tweet:
     runs-on: ubuntu-latest
@@ -27,7 +40,8 @@ jobs:
           python-version: "3.11"
           cache: pip
       - run: pip install -r requirements.txt
-      - run: python post_highlights.py
+      - name: Post highlights
+        run: python post_highlights.py
         env:
           CONSUMER_KEY: ${{ secrets.CONSUMER_KEY }}
           CONSUMER_SECRET: ${{ secrets.CONSUMER_SECRET }}
@@ -36,3 +50,15 @@ jobs:
           BEARER_TOKEN: ${{ secrets.BEARER_TOKEN }}
           HIGHLIGHTS_MAX_TWEETS: ${{ inputs.max_tweets || '8' }}
           DRY_RUN: ${{ inputs.dry_run || 'false' }}
+      - name: Commit updated dedup state
+        if: success()
+        run: |
+          if [[ -n "$(git status --porcelain .state/)" ]]; then
+            git config user.name "github-actions[bot]"
+            git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+            git add .state/
+            git commit -m "Update last highlight game id [skip ci]"
+            git push
+          else
+            echo "No state change; nothing to commit."
+          fi

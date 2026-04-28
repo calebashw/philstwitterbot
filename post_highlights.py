@@ -1,13 +1,15 @@
 # Author: Caleb Ash
 # Created June 2023, refactored 2026
-# Tweets Phillies highlights from yesterday's finished game(s).
-# Hard-capped on tweets/run so a parse bug can't blow up your API bill.
+# Tweets Phillies highlights from the most recently finished game.
+# Staleness-capped + dedup'd via .state/last_highlight_game_id so the same
+# game isn't posted twice across multiple cron fires.
 
 import os
 import re
 import sys
 import time
 from datetime import date, timedelta
+from pathlib import Path
 
 import statsapi
 
@@ -18,6 +20,8 @@ MAX_TWEETS_PER_RUN = int(os.environ.get("HIGHLIGHTS_MAX_TWEETS", "8"))
 DRY_RUN = os.environ.get("DRY_RUN", "").lower() in ("1", "true", "yes")
 TWEET_LIMIT = 280
 SLEEP_BETWEEN_TWEETS_SEC = 3
+MAX_STALENESS_DAYS = int(os.environ.get("HIGHLIGHTS_MAX_AGE_DAYS", "2"))
+STATE_FILE = Path(os.environ.get("HIGHLIGHTS_STATE_FILE", ".state/last_highlight_game_id"))
 
 
 def split_lines(blob: str) -> list[str]:
@@ -25,7 +29,6 @@ def split_lines(blob: str) -> list[str]:
 
 
 def first_two_words(text: str) -> str:
-    """Extract the first two whitespace/apostrophe-separated tokens — used to identify the player."""
     out = []
     k = 0
     for ch in text:
@@ -53,15 +56,42 @@ def is_phillie(name: str) -> bool:
     return matches[0].get("currentTeam", {}).get("id") == PHILLIES_TEAM_ID
 
 
-def yesterday_game_ids() -> list[int]:
-    yesterday = date.today() - timedelta(days=1)
-    games = statsapi.schedule(start_date=yesterday.isoformat(), team=PHILLIES_TEAM_ID)
-    return [g["game_id"] for g in games if g.get("status") == "Final"]
+def most_recent_finished_game() -> dict | None:
+    """Return the most recently finished Phillies game in the last MAX_STALENESS_DAYS, or None."""
+    today = date.today()
+    earliest = today - timedelta(days=MAX_STALENESS_DAYS)
+    games = statsapi.schedule(
+        start_date=earliest.isoformat(),
+        end_date=today.isoformat(),
+        team=PHILLIES_TEAM_ID,
+    )
+    finished = [g for g in games if g.get("status") == "Final"]
+    if not finished:
+        return None
+    # game_id is monotonically assigned, so this picks the most recent including doubleheaders.
+    finished.sort(key=lambda g: g.get("game_id", 0), reverse=True)
+    return finished[0]
+
+
+def read_last_posted() -> int | None:
+    if not STATE_FILE.exists():
+        return None
+    text = STATE_FILE.read_text().strip()
+    if not text:
+        return None
+    try:
+        return int(text)
+    except ValueError:
+        print(f"  state file {STATE_FILE} contains non-int {text!r}; ignoring.")
+        return None
+
+
+def write_last_posted(game_id: int) -> None:
+    STATE_FILE.parent.mkdir(parents=True, exist_ok=True)
+    STATE_FILE.write_text(f"{game_id}\n")
 
 
 def collect_highlight_tweets(game_id: int) -> list[str]:
-    """Walk the human-readable highlights blob, pair each description with its URL,
-    keep only Phillies-player highlights that fit in a tweet."""
     try:
         blob = statsapi.game_highlights(game_id)
     except Exception as e:
@@ -73,7 +103,6 @@ def collect_highlight_tweets(game_id: int) -> list[str]:
     pending = ""
     skip_next = False
 
-    # Skip the first chunk (lineups, weather, etc.) — same heuristic as the original script.
     for line in lines[8:]:
         if not line.startswith("https") and skip_next:
             skip_next = False
@@ -95,21 +124,26 @@ def collect_highlight_tweets(game_id: int) -> list[str]:
 
 
 def main() -> int:
-    game_ids = yesterday_game_ids()
-    if not game_ids:
-        print("No finished Phillies game yesterday; nothing to tweet.")
+    game = most_recent_finished_game()
+    if game is None:
+        print(f"No finished Phillies game in the last {MAX_STALENESS_DAYS} day(s); nothing to tweet.")
         return 0
 
-    all_tweets: list[str] = []
-    for gid in game_ids:
-        all_tweets.extend(collect_highlight_tweets(gid))
-
-    if not all_tweets:
-        print("No Phillies highlights matched; nothing to tweet.")
+    game_id = game["game_id"]
+    summary = game.get("summary", "")
+    last_posted = read_last_posted()
+    if last_posted == game_id:
+        print(f"Highlights for game {game_id} ({summary}) already posted; skipping.")
         return 0
 
-    capped = all_tweets[:MAX_TWEETS_PER_RUN]
-    print(f"Found {len(all_tweets)} candidate highlights, posting {len(capped)} (cap={MAX_TWEETS_PER_RUN}).")
+    tweets = collect_highlight_tweets(game_id)
+    if not tweets:
+        # Don't write state — highlights may simply not be uploaded yet; let the next fire retry.
+        print(f"No Phillies highlights matched for game {game_id} ({summary}); will retry next run.")
+        return 0
+
+    capped = tweets[:MAX_TWEETS_PER_RUN]
+    print(f"Game {game_id} ({summary}): found {len(tweets)} highlights, posting {len(capped)} (cap={MAX_TWEETS_PER_RUN}).")
 
     twitter = TwitterClient()
     failures = 0
@@ -121,6 +155,11 @@ def main() -> int:
             if twitter.tweet(msg) is None:
                 failures += 1
             time.sleep(SLEEP_BETWEEN_TWEETS_SEC)
+
+    if failures == 0 and not DRY_RUN:
+        write_last_posted(game_id)
+        print(f"Recorded game {game_id} as posted in {STATE_FILE}.")
+
     return 1 if failures else 0
 
 
