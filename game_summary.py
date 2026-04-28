@@ -27,12 +27,14 @@ def main() -> int:
         return 0
 
     twitter = TwitterClient()
+    failures = 0
     for game in finished:
         summary = game.get("summary", "")
         message = f"Yesterday's game summary:\n{summary}"
         print(message)
-        twitter.tweet(message)
-    return 0
+        if twitter.tweet(message) is None:
+            failures += 1
+    return 1 if failures else 0
 
 
 if __name__ == "__main__":

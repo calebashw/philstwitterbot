@@ -45,7 +45,8 @@ def main() -> int:
         return 0
 
     print(message)
-    TwitterClient().tweet(message)
+    if TwitterClient().tweet(message) is None:
+        return 1
     return 0
 
 
