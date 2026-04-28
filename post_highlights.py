@@ -112,14 +112,16 @@ def main() -> int:
     print(f"Found {len(all_tweets)} candidate highlights, posting {len(capped)} (cap={MAX_TWEETS_PER_RUN}).")
 
     twitter = TwitterClient()
+    failures = 0
     for i, msg in enumerate(capped, start=1):
         print(f"[{i}/{len(capped)}] {msg}")
         if DRY_RUN:
             print("  (DRY_RUN: skipped)")
         else:
-            twitter.tweet(msg)
+            if twitter.tweet(msg) is None:
+                failures += 1
             time.sleep(SLEEP_BETWEEN_TWEETS_SEC)
-    return 0
+    return 1 if failures else 0
 
 
 if __name__ == "__main__":
