@@ -5,7 +5,6 @@
 # game isn't posted twice across multiple cron fires.
 
 import os
-import re
 import sys
 import time
 from datetime import date, timedelta
@@ -24,21 +23,41 @@ MAX_STALENESS_DAYS = int(os.environ.get("HIGHLIGHTS_MAX_AGE_DAYS", "2"))
 STATE_FILE = Path(os.environ.get("HIGHLIGHTS_STATE_FILE", ".state/last_highlight_game_id"))
 
 
-def split_lines(blob: str) -> list[str]:
-    return [s for s in re.split(r"\n+", blob) if s.strip()]
-
-
 def first_two_words(text: str) -> str:
+    """Player-name extractor: grab everything before the second whitespace/apostrophe."""
     out = []
     k = 0
     for ch in text:
         if ch in (" ", "'"):
             k += 1
-            if k == 2:
-                break
-        else:
-            out.append(ch)
+        if k == 2:
+            break
+        out.append(ch)
     return "".join(out).strip()
+
+
+def parse_highlight_blocks(blob: str) -> list[tuple[str, str, str]]:
+    """Parse the MLB highlights blob into (title, description, url) tuples.
+    Block layout is variable: some have title+description+URL, some skip the
+    description (title, blank line, URL). The URL line always terminates a
+    block, so we use that as the delimiter rather than splitting on blank lines.
+    """
+    results = []
+    current: list[str] = []
+    for raw_line in blob.split("\n"):
+        line = raw_line.strip()
+        if not line:
+            continue
+        current.append(line)
+        if line.startswith("http"):
+            url = current[-1]
+            non_url = current[:-1]
+            if non_url:
+                title = non_url[0]
+                description = non_url[1] if len(non_url) > 1 else ""
+                results.append((title, description, url))
+            current = []
+    return results
 
 
 def is_phillie(name: str) -> bool:
@@ -98,28 +117,22 @@ def collect_highlight_tweets(game_id: int) -> list[str]:
         print(f"  game_highlights failed for game_id={game_id}: {e}")
         return []
 
-    lines = split_lines(blob)
     tweets: list[str] = []
-    pending = ""
-    skip_next = False
-
-    for line in lines[8:]:
-        if not line.startswith("https") and skip_next:
-            skip_next = False
+    for title, description, url in parse_highlight_blocks(blob):
+        # Skip the "Condensed Game" reel — not a player highlight, and doesn't pass the player filter.
+        if title.lower().startswith("condensed game"):
             continue
-
-        pending = (pending + " " + line).strip()
-
-        if line.startswith("https"):
-            if pending.startswith("https"):
-                pending = ""
+        # Filter to Phillies players via the title (more reliable than description).
+        if not is_phillie(first_two_words(title)):
+            continue
+        # Prefer description (richer); fall back to title if too long or absent.
+        body = description or title
+        tweet = f"{body} {url}".strip()
+        if len(tweet) > TWEET_LIMIT:
+            tweet = f"{title} {url}".strip()
+            if len(tweet) > TWEET_LIMIT:
                 continue
-            if len(pending) <= TWEET_LIMIT and is_phillie(first_two_words(pending)):
-                tweets.append(pending)
-            pending = ""
-        else:
-            skip_next = True
-
+        tweets.append(tweet)
     return tweets
 
 
