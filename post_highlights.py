@@ -114,6 +114,19 @@ def write_last_posted(game_id: int) -> None:
     STATE_FILE.write_text(f"{game_id}\n")
 
 
+def _format_tweet(title: str, description: str, url: str) -> str | None:
+    """Build a tweet from a highlight block. Prefer the (richer) description;
+    fall back to title; return None if even title+URL exceeds TWEET_LIMIT."""
+    body = description or title
+    tweet = f"{body} {url}".strip()
+    if len(tweet) <= TWEET_LIMIT:
+        return tweet
+    tweet = f"{title} {url}".strip()
+    if len(tweet) <= TWEET_LIMIT:
+        return tweet
+    return None
+
+
 def collect_highlight_tweets(game_id: int) -> list[str]:
     try:
         blob = statsapi.game_highlights(game_id)
@@ -121,22 +134,31 @@ def collect_highlight_tweets(game_id: int) -> list[str]:
         print(f"  game_highlights failed for game_id={game_id}: {e}")
         return []
 
+    blocks = parse_highlight_blocks(blob)
+
+    # Cost-saving fast path: if MLB has uploaded a "Condensed Game" reel, post just that
+    # one tweet (single video covering the whole game) instead of fanning out to N
+    # per-play highlights. Saves ~3-7 X API write calls per game on pay-per-use.
+    for title, description, url in blocks:
+        if title.lower().startswith("condensed game"):
+            tweet = _format_tweet(title, description, url)
+            if tweet is not None:
+                print("  Condensed Game reel found; posting 1 tweet instead of per-play highlights.")
+                return [tweet]
+            # If formatting failed (very long), fall through to per-play logic.
+            print("  Condensed Game reel found but didn't fit in a tweet; falling back to per-play.")
+            break
+
+    # Fallback: per-play highlights filtered to Phillies players.
     tweets: list[str] = []
-    for title, description, url in parse_highlight_blocks(blob):
-        # Skip the "Condensed Game" reel — not a player highlight, and doesn't pass the player filter.
+    for title, description, url in blocks:
         if title.lower().startswith("condensed game"):
             continue
-        # Filter to Phillies players via the title (more reliable than description).
         if not is_phillie(first_two_words(title)):
             continue
-        # Prefer description (richer); fall back to title if too long or absent.
-        body = description or title
-        tweet = f"{body} {url}".strip()
-        if len(tweet) > TWEET_LIMIT:
-            tweet = f"{title} {url}".strip()
-            if len(tweet) > TWEET_LIMIT:
-                continue
-        tweets.append(tweet)
+        tweet = _format_tweet(title, description, url)
+        if tweet is not None:
+            tweets.append(tweet)
     return tweets
 
 
