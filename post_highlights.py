@@ -87,8 +87,12 @@ def most_recent_finished_game() -> dict | None:
     finished = [g for g in games if g.get("status") == "Final"]
     if not finished:
         return None
-    # game_id is monotonically assigned, so this picks the most recent including doubleheaders.
-    finished.sort(key=lambda g: g.get("game_id", 0), reverse=True)
+    # Sort by start time (most recent first); game_id is a tiebreaker for doubleheaders.
+    # NOTE: game_id is NOT monotonic by date in MLB-StatsAPI -- e.g., 5/1=823877,
+    # 5/2=823876, 5/3=823875 (descending). Sorting by game_id picks the wrong game.
+    def sort_key(g):
+        return (g.get("game_datetime") or g.get("game_date") or "", g.get("game_id", 0))
+    finished.sort(key=sort_key, reverse=True)
     return finished[0]
 
 
